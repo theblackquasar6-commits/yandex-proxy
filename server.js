@@ -1,40 +1,40 @@
 const http = require('http');
 const https = require('https');
 const net = require('net');
+const url = require('url');
 
 const server = http.createServer((clientReq, clientRes) => {
   console.log(`[HTTP] ${clientReq.method} ${clientReq.url}`);
   
-  // Определяем реальный хост из заголовков
-  const hostHeader = clientReq.headers['host'];
-  let targetHost = 'yandex.com'; // По умолчанию Яндекс
+  // Получаем реальный хост из заголовка Host
+  const originalHost = clientReq.headers['host'];
   
-  // Если хост указан и это не Яндекс, используем реальный хост
-  if (hostHeader && !hostHeader.includes('yandex')) {
-    targetHost = hostHeader.split(':')[0]; // Убираем порт если есть
-    console.log(`Detected real host: ${targetHost}`);
+  if (!originalHost) {
+    clientRes.writeHead(400);
+    return clientRes.end('No Host header');
   }
+
+  // Определяем куда делать запрос - используем ОРИГИНАЛЬНЫЙ хост
+  const targetHost = originalHost.split(':')[0]; // убираем порт если есть
+  const useHTTPS = true; // всегда используем HTTPS для внешних сайтов
   
-  // Используем HTTPS для всего кроме локальных адресов
-  const useHTTPS = !targetHost.includes('localhost') && !targetHost.includes('127.0.0.1');
-  const port = useHTTPS ? 443 : 80;
-  const protocol = useHTTPS ? https : http;
+  console.log(`Proxying to real host: ${targetHost}`);
   
   const options = {
     hostname: targetHost,
-    port: port,
+    port: 443,
     path: clientReq.url,
     method: clientReq.method,
     headers: {
       ...clientReq.headers,
-      'host': targetHost
+      'host': targetHost // сохраняем оригинальный хост
     }
   };
 
-  const proxyReq = protocol.request(options, (proxyRes) => {
+  const proxyReq = https.request(options, (proxyRes) => {
     console.log(`[RESPONSE] ${proxyRes.statusCode} from ${targetHost}`);
     
-    // Подменяем заголовки чтобы ответ выглядел от Яндекс
+    // ПОДМЕНЯЕМ только заголовки чтобы трафик выглядел от Яндекс
     const headers = {
       ...proxyRes.headers,
       'server': 'Yandex',
@@ -51,7 +51,7 @@ const server = http.createServer((clientReq, clientRes) => {
       'server': 'Yandex',
       'content-type': 'text/html'
     });
-    clientRes.end('Error');
+    clientRes.end('Proxy Error');
   });
 
   if (['POST', 'PUT', 'PATCH'].includes(clientReq.method)) {
@@ -61,12 +61,12 @@ const server = http.createServer((clientReq, clientRes) => {
   }
 });
 
-// Обработка HTTPS трафика (для приложений)
+// Обработка HTTPS трафика
 server.on('connect', (req, clientSocket, head) => {
   const [targetHost, targetPort] = req.url.split(':');
   console.log(`[HTTPS] CONNECT to real host: ${targetHost}:${targetPort || 443}`);
   
-  // Соединяемся с реальным хостом
+  // Соединяемся с РЕАЛЬНЫМ хостом приложения
   const serverSocket = net.connect(targetPort || 443, targetHost, () => {
     clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
     serverSocket.write(head);
@@ -84,5 +84,5 @@ server.on('connect', (req, clientSocket, head) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Smart proxy running on port ${PORT}`);
-  console.log('Traffic will be masked as Yandex but go to real destinations');
+  console.log('Apps will connect to real servers, but traffic masked as Yandex');
 });
